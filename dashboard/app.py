@@ -19,8 +19,47 @@ app = dash.Dash(
     external_stylesheets=[dbc.themes.BOOTSTRAP],
     meta_tags=[
         {"name": "viewport", "content": "width=device-width, initial-scale=1"}
+    ],
+    # 添加以下外部脚本支持
+    external_scripts=[
+        # MathJax配置
+        {
+            "src": "https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-MML-AM_CHTML",
+        }
     ]
 )
+
+# 也可以在app.index_string中设置
+app.index_string = '''
+<!DOCTYPE html>
+<html>
+    <head>
+        {%metas%}
+        <title>{%title%}</title>
+        {%favicon%}
+        {%css%}
+        <script type="text/x-mathjax-config">
+            MathJax.Hub.Config({
+                tex2jax: {
+                    inlineMath: [ ['$','$'], ["\\(","\\)"] ],
+                    displayMath: [ ['$$','$$'], ["\\[","\\]"] ],
+                    processEscapes: true
+                }
+            });
+        </script>
+        <script type="text/javascript" async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-MML-AM_CHTML">
+        </script>
+    </head>
+    <body>
+        {%app_entry%}
+        <footer>
+            {%config%}
+            {%scripts%}
+            {%renderer%}
+        </footer>
+    </body>
+</html>
+'''
 
 # 设置应用标题
 app.title = "AdaTaylor - 泰勒展开自适应逼近器"
@@ -236,12 +275,16 @@ def update_plots(n_clicks, example_function, custom_function, x0, max_order, dom
         
         # 默认结果文本
         results = html.Div([
-            html.H5("sin(x) 的泰勒展开:"),
-            html.P("展开点: x₀ = 0"),
-            html.P("选择阶数: 5"),
+            html.H5(f"函数 {function_str} 的泰勒展开:"),
+            html.P(f"展开点: x₀ = {x0}"),
+            html.P(order_str),
             html.Hr(),
-            html.P("展开式: x - x³/6 + x⁵/120 + O(x⁷)"),
-            html.P("最大误差: 3.82e-7"),
+            html.P("展开式:"),
+            dcc.Markdown(f"$$f(x) \\approx {expansion_str}$$", mathjax=True),
+            html.Hr(),
+            html.P(f"最大绝对误差: {error_dict['max_absolute']:.2e}"),
+            html.P(f"平均绝对误差: {error_dict['mean_absolute']:.2e}"),
+            html.P(f"函数类型: {approximator.function_type}"),
         ])
         
         return main_fig, stepwise_fig, error_fig, results
@@ -303,7 +346,7 @@ def update_plots(n_clicks, example_function, custom_function, x0, max_order, dom
             html.P(order_str),
             html.Hr(),
             html.P("展开式:"),
-            dcc.Markdown(f"$$f(x) \\approx {expansion_str}$$"),
+            dcc.Markdown(f"$$f(x) \\approx {expansion_str}$$", mathjax=True),
             html.Hr(),
             html.P(f"最大绝对误差: {error_dict['max_absolute']:.2e}"),
             html.P(f"平均绝对误差: {error_dict['mean_absolute']:.2e}"),
