@@ -1,23 +1,38 @@
+"""
+Dash应用模块 - 创建Web界面
+"""
+
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import dash
-from dash import dcc, html, callback, Input, Output, State
 import dash_bootstrap_components as dbc
-import sympy as sp
-import numpy as np
-import plotly.graph_objects as go
-from sympy.parsing.sympy_parser import parse_expr
 
 # 导入自定义模块
-import sys
-import os
-# 添加项目根目录到路径
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from adataylor.approximator import TaylorApproximator
 from visualization.interactive import plot_approximation, create_stepwise_visualization, error_analysis_visualization
 
 # 创建Dash应用
-app = dash.Dash(__name__, 
-               external_stylesheets=[dbc.themes.BOOTSTRAP],
-               title="AdaTaylor - 泰勒展开自适应逼近器")
+app = dash.Dash(
+    __name__,
+    external_stylesheets=[dbc.themes.BOOTSTRAP],
+    meta_tags=[
+        {"name": "viewport", "content": "width=device-width, initial-scale=1"}
+    ]
+)
+
+# 设置应用标题
+app.title = "AdaTaylor - 泰勒展开自适应逼近器"
+
+# 防止回调异常停止应用
+app.config.suppress_callback_exceptions = True
+
+from dash import dcc, html, callback, Input, Output, State
+import sympy as sp
+import numpy as np
+import plotly.graph_objects as go
+from sympy.parsing.sympy_parser import parse_expr
 
 # 示例函数列表
 example_functions = [
@@ -190,10 +205,10 @@ app.layout = dbc.Container([
 
 # 回调函数
 @app.callback(
-    [Output("main-plot", "figure"),
-     Output("stepwise-plot", "figure"),
-     Output("error-analysis-plot", "figure"),
-     Output("results-container", "children")],
+    [Output("main-plot", "figure", allow_duplicate=True),
+     Output("stepwise-plot", "figure", allow_duplicate=True),
+     Output("error-analysis-plot", "figure", allow_duplicate=True),  # 修改为与布局匹配
+     Output("results-container", "children", allow_duplicate=True)],  # 修改为与布局匹配
     [Input("compute-button", "n_clicks")],
     [State("example-function-dropdown", "value"),
      State("custom-function-input", "value"),
@@ -201,7 +216,8 @@ app.layout = dbc.Container([
      State("max-order-slider", "value"),
      State("domain-min-input", "value"),
      State("domain-max-input", "value"),
-     State("epsilon-input", "value")]
+     State("epsilon-input", "value")],
+     prevent_initial_call=True
 )
 def update_plots(n_clicks, example_function, custom_function, x0, max_order, domain_min, domain_max, epsilon):
     if n_clicks is None:

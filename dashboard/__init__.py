@@ -7,3 +7,5 @@ from .layouts import main_layout, create_header, create_footer
 from .callbacks import register_callbacks
 
 __all__ = ['app', 'main_layout', 'create_header', 'create_footer', 'register_callbacks']
+
+# 删除这里的回调函数

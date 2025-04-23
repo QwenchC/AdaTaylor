@@ -2,7 +2,7 @@
 交互回调模块 - 定义Dash应用的交互行为
 """
 
-from dash import Input, Output, State, callback
+from dash import Input, Output, State, callback, ctx
 import sympy as sp
 import numpy as np
 
@@ -18,10 +18,10 @@ def register_callbacks(app):
     
     @app.callback(
         [
-            Output("main-plot", "figure"),
-            Output("stepwise-plot", "figure"),
-            Output("error-plot", "figure"),
-            Output("results-output", "children")
+            Output("main-plot", "figure", allow_duplicate=True),
+            Output("stepwise-plot", "figure", allow_duplicate=True),
+            Output("error-plot", "figure", allow_duplicate=True),
+            Output("results-output", "children", allow_duplicate=True)
         ],
         [
             Input("compute-button", "n_clicks"),

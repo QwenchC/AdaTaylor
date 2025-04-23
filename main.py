@@ -14,14 +14,7 @@ from dashboard.callbacks import register_callbacks
 
 def start_dashboard(debug=False, port=8050):
     """启动Web仪表板"""
-    # 设置应用布局
-    app.layout = main_layout()
-    
-    # 注册回调
-    register_callbacks(app)
-    
-    # 启动服务器
-    app.run_server(debug=debug, port=port)
+    app.run(debug=debug, port=port)  # 将 run_server 改为 run
     
 def run_cli():
     """运行命令行界面"""
@@ -87,5 +80,4 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         run_cli()
     else:
-        print("启动Web仪表板...")
         start_dashboard(debug=True)

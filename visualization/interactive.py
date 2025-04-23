@@ -1,207 +1,185 @@
+"""
+交互式可视化模块 - 创建交互式图表
+"""
+
 import numpy as np
+import sympy as sp
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import sympy as sp
 
-def plot_approximation(approximator, f_expr, domain=(-5, 5), num_points=1000, 
-                     error_scale='linear', title=None):
+def plot_approximation(approximator, f_expr, domain=(-5, 5), num_points=1000):
     """
-    创建交互式函数逼近可视化
+    绘制函数与其泰勒展开的对比图
     
     参数:
         approximator: TaylorApproximator实例
         f_expr: 原始函数表达式
-        domain: 显示范围
+        domain: 显示范围 (min, max)
         num_points: 采样点数
-        error_scale: 误差显示比例 ('linear'或'log')
-        title: 图表标题
-    
+        
     返回:
-        plotly Figure对象
+        plotly图表对象
     """
-    x_sym = approximator.x
+    # 生成x值
     x_vals = np.linspace(domain[0], domain[1], num_points)
     
     # 计算原始函数值
-    f_lambda = sp.lambdify(x_sym, f_expr, 'numpy')
+    x_sym = list(f_expr.free_symbols)[0]
+    f_func = sp.lambdify(x_sym, f_expr, 'numpy')
+    
     try:
-        f_vals = f_lambda(x_vals)
+        f_vals = f_func(x_vals)
     except:
-        # 对有奇点的函数，逐点计算
-        f_vals = np.zeros(num_points)
+        # 逐点计算
+        f_vals = np.zeros_like(x_vals)
         for i, x in enumerate(x_vals):
             try:
                 f_vals[i] = float(f_expr.subs(x_sym, x))
             except:
                 f_vals[i] = np.nan
     
-    # 计算逼近值
-    approx_vals = approximator.evaluate(x_vals)
+    # 计算泰勒展开值
+    taylor_vals = approximator.evaluate(x_vals)
     
     # 计算误差
-    abs_error = np.abs(f_vals - approx_vals)
-    # 处理潜在的无穷大或NaN值
-    abs_error = np.where(np.isfinite(abs_error), abs_error, np.nan)
+    abs_error = np.abs(f_vals - taylor_vals)
     
-    # 创建子图：上方是函数对比，下方是误差
-    fig = make_subplots(rows=2, cols=1, 
-                       shared_xaxes=True,
-                       vertical_spacing=0.1,
-                       subplot_titles=("函数与泰勒逼近", "误差分析"),
-                       row_heights=[0.7, 0.3])
+    # 创建子图
+    fig = make_subplots(
+        rows=2, cols=1, 
+        shared_xaxes=True,
+        vertical_spacing=0.1,
+        subplot_titles=("函数与泰勒展开比较", "绝对误差"),
+        row_heights=[0.7, 0.3]
+    )
     
     # 添加原始函数
     fig.add_trace(
-        go.Scatter(x=x_vals, y=f_vals, name="原始函数", line=dict(color='blue')),
+        go.Scatter(
+            x=x_vals, 
+            y=f_vals, 
+            mode='lines',
+            name='原始函数',
+            line=dict(color='blue', width=2)
+        ),
         row=1, col=1
     )
     
-    # 添加逼近函数
+    # 添加泰勒展开
     if approximator.function_type == "piecewise":
-        # 对分段函数，分段显示
-        for i, (segment, x0, _, order) in enumerate(approximator.segments):
-            mask = (x_vals >= segment[0]) & (x_vals <= segment[1])
-            if np.any(mask):
-                segment_x = x_vals[mask]
-                segment_y = approx_vals[mask]
-                fig.add_trace(
-                    go.Scatter(
-                        x=segment_x, 
-                        y=segment_y, 
-                        name=f"泰勒逼近 (分段{i+1}, 阶数:{order})", 
-                        line=dict(color='red')
-                    ),
-                    row=1, col=1
-                )
-                # 添加展开点标记
-                fig.add_trace(
-                    go.Scatter(
-                        x=[x0], 
-                        y=[f_lambda(x0) if callable(f_lambda) else float(f_expr.subs(x_sym, x0))], 
-                        mode='markers',
-                        marker=dict(size=10, color='black'),
-                        name=f"展开点 x₀={x0:.2f}"
-                    ),
-                    row=1, col=1
-                )
+        # 对于分段函数，每段用不同颜色
+        for i, (a, b, x_mid, order, _) in enumerate(approximator.segments):
+            # 分段的x范围
+            mask = (x_vals >= a) & (x_vals <= b)
+            x_segment = x_vals[mask]
+            taylor_segment = taylor_vals[mask]
+            
+            fig.add_trace(
+                go.Scatter(
+                    x=x_segment, 
+                    y=taylor_segment, 
+                    mode='lines',
+                    name=f'泰勒展开 (区段{i+1}, 阶数={order})',
+                    line=dict(width=2)
+                ),
+                row=1, col=1
+            )
+            
+            # 标记展开点
+            fig.add_trace(
+                go.Scatter(
+                    x=[x_mid], 
+                    y=[approximator.evaluate(x_mid)], 
+                    mode='markers',
+                    name=f'展开点 {i+1}',
+                    marker=dict(size=10, symbol='x')
+                ),
+                row=1, col=1
+            )
     else:
-        # 单一展开点
+        # 对于普通函数
         fig.add_trace(
             go.Scatter(
                 x=x_vals, 
-                y=approx_vals, 
-                name=f"泰勒逼近 (阶数:{approximator.order})", 
-                line=dict(color='red')
+                y=taylor_vals, 
+                mode='lines',
+                name=f'泰勒展开 (阶数={approximator.order})',
+                line=dict(color='red', width=2)
             ),
             row=1, col=1
         )
-        # 添加展开点标记
+        
+        # 标记展开点
         fig.add_trace(
             go.Scatter(
-                x=[approximator.expansion_point], 
-                y=[f_lambda(approximator.expansion_point) if callable(f_lambda) else 
-                   float(f_expr.subs(x_sym, approximator.expansion_point))], 
+                x=[approximator.x0], 
+                y=[approximator.evaluate(approximator.x0)], 
                 mode='markers',
-                marker=dict(size=10, color='black'),
-                name=f"展开点 x₀={approximator.expansion_point:.2f}"
+                name='展开点',
+                marker=dict(size=10, symbol='x', color='black')
             ),
             row=1, col=1
         )
     
-    # 添加误差曲线
-    if error_scale == 'log':
-        # 对数误差（处理零误差）
-        log_error = np.log10(abs_error + 1e-15)
-        fig.add_trace(
-            go.Scatter(x=x_vals, y=log_error, name="对数误差", line=dict(color='green')),
-            row=2, col=1
-        )
-        fig.update_yaxes(title_text="log₁₀(误差)", row=2, col=1)
-    else:
-        # 线性误差
-        fig.add_trace(
-            go.Scatter(x=x_vals, y=abs_error, name="绝对误差", line=dict(color='green')),
-            row=2, col=1
-        )
-        fig.update_yaxes(title_text="绝对误差", row=2, col=1)
+    # 添加误差图
+    fig.add_trace(
+        go.Scatter(
+            x=x_vals, 
+            y=abs_error, 
+            mode='lines',
+            name='绝对误差',
+            line=dict(color='green', width=1.5)
+        ),
+        row=2, col=1
+    )
     
     # 更新布局
-    if title is None:
-        if approximator.function_type == "smooth":
-            title = f"泰勒展开逼近 (阶数: {approximator.order})"
-        elif approximator.function_type == "piecewise":
-            title = f"分段泰勒展开逼近 ({len(approximator.segments)}段)"
-        else:
-            title = f"泰勒展开逼近 (振荡函数, 阶数: {approximator.order})"
-    
     fig.update_layout(
-        title=title,
-        xaxis_title="x",
-        yaxis_title="f(x)",
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        ),
-        height=800,
-        hovermode="x unified"
+        height=700,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+        margin=dict(l=60, r=60, t=80, b=60)
     )
     
-    # 添加误差统计信息
-    max_error = np.nanmax(abs_error)
-    mean_error = np.nanmean(abs_error)
-    
-    error_stats = (
-        f"最大误差: {max_error:.2e}<br>"
-        f"平均误差: {mean_error:.2e}"
-    )
-    
-    fig.add_annotation(
-        xref="paper", yref="paper",
-        x=0.01, y=0.25,
-        text=error_stats,
-        showarrow=False,
-        bgcolor="rgba(255, 255, 255, 0.8)",
-        bordercolor="black",
-        borderwidth=1
-    )
+    fig.update_yaxes(title_text='f(x)', row=1, col=1)
+    fig.update_yaxes(title_text='误差', type='log', row=2, col=1)
+    fig.update_xaxes(title_text='x', row=2, col=1)
     
     return fig
 
-def create_stepwise_visualization(f_expr, x_sym, x0, max_order=5, domain=(-5, 5), num_points=1000):
+def create_stepwise_visualization(f_expr, x_sym, x0, max_order=10, domain=None):
     """
-    创建逐步展开演示可视化
+    创建逐步展开的可视化
     
     参数:
-        f_expr: sympy表达式
-        x_sym: sympy符号
+        f_expr: 函数表达式
+        x_sym: 符号变量
         x0: 展开点
-        max_order: 最大展开阶数
-        domain: 显示范围
-        num_points: 采样点数
+        max_order: 最大阶数
+        domain: 显示范围 (min, max)
         
     返回:
-        plotly Figure对象
+        plotly图表对象
     """
-    x_vals = np.linspace(domain[0], domain[1], num_points)
+    if domain is None:
+        domain = (x0 - 5, x0 + 5)
+    
+    # 生成x值
+    x_vals = np.linspace(domain[0], domain[1], 1000)
     
     # 计算原始函数值
-    f_lambda = sp.lambdify(x_sym, f_expr, 'numpy')
-    f_vals = f_lambda(x_vals)
+    f_func = sp.lambdify(x_sym, f_expr, 'numpy')
+    try:
+        f_vals = f_func(x_vals)
+    except:
+        # 逐点计算
+        f_vals = np.zeros_like(x_vals)
+        for i, x in enumerate(x_vals):
+            try:
+                f_vals[i] = float(f_expr.subs(x_sym, x))
+            except:
+                f_vals[i] = np.nan
     
-    # 计算各阶泰勒展开
-    approximations = []
-    for order in range(max_order + 1):
-        taylor_sum = 0
-        for n in range(order + 1):
-            nth_derivative = sp.diff(f_expr, (x_sym, n))
-            coef = float(nth_derivative.subs(x_sym, x0)) / np.math.factorial(n)
-            taylor_sum += coef * (x_vals - x0) ** n
-        approximations.append(taylor_sum)
-    
-    # 创建基础图表
+    # 创建图表
     fig = go.Figure()
     
     # 添加原始函数
@@ -209,238 +187,248 @@ def create_stepwise_visualization(f_expr, x_sym, x0, max_order=5, domain=(-5, 5)
         go.Scatter(
             x=x_vals, 
             y=f_vals, 
-            name="原始函数", 
+            mode='lines',
+            name='原始函数',
             line=dict(color='blue', width=2)
         )
     )
     
-    # 添加各阶泰勒展开
-    colors = ['red', 'green', 'purple', 'orange', 'cyan', 'magenta']
-    for order, approx in enumerate(approximations):
-        fig.add_trace(
-            go.Scatter(
+    # 计算不同阶数的展开
+    colors = ['red', 'green', 'purple', 'orange', 'brown', 'pink', 'gray', 'olive', 'cyan', 'magenta']
+    
+    accumulated = 0
+    trace_count = 1  # 从1开始，因为已经添加了原始函数
+    term_traces = []
+    accum_traces = []
+    
+    for n in range(max_order + 1):
+        # 计算n阶导数
+        try:
+            if n == 0:
+                dnf = f_expr.subs(x_sym, x0)
+            else:
+                dnf = sp.diff(f_expr, x_sym, n).subs(x_sym, x0)
+            
+            # 计算展开项
+            from adataylor.utils import factorial
+            term = dnf * (x_sym - x0)**n / factorial(n)
+            
+            # 累加
+            accumulated += term
+            
+            # 转换为可计算函数
+            term_func = sp.lambdify(x_sym, term, 'numpy')
+            accum_func = sp.lambdify(x_sym, accumulated, 'numpy')
+            
+            # 计算值
+            try:
+                term_vals = term_func(x_vals)
+                accum_vals = accum_func(x_vals)
+            except:
+                # 逐点计算
+                term_vals = np.zeros_like(x_vals)
+                accum_vals = np.zeros_like(x_vals)
+                for i, x in enumerate(x_vals):
+                    try:
+                        term_vals[i] = float(term.subs(x_sym, x))
+                        accum_vals[i] = float(accumulated.subs(x_sym, x))
+                    except:
+                        term_vals[i] = np.nan
+                        accum_vals[i] = np.nan
+            
+            # 添加项
+            if n > 0:  # 跳过常数项
+                opacity = 0.5  # 使项在图上不那么显眼
+                term_trace = go.Scatter(
+                    x=x_vals, 
+                    y=term_vals, 
+                    mode='lines',
+                    name=f'项 {n}: {sp.latex(term)}',
+                    line=dict(color=colors[n % len(colors)], width=1, dash='dot'),
+                    opacity=opacity,
+                    visible='legendonly'  # 默认不显示
+                )
+                fig.add_trace(term_trace)
+                term_traces.append(term_trace)
+                trace_count += 1
+            
+            # 添加累积和
+            accum_trace = go.Scatter(
                 x=x_vals, 
-                y=approx, 
-                name=f"{order}阶泰勒展开", 
-                line=dict(
-                    color=colors[order % len(colors)], 
-                    width=1.5,
-                    dash='dash' if order < max_order else None
-                ),
-                visible=(order == 0)  # 初始只显示0阶
+                y=accum_vals, 
+                mode='lines',
+                name=f'截至{n}阶',
+                line=dict(color=colors[n % len(colors)], width=2),
+                visible=(n == max_order)  # 只显示最高阶和0阶
             )
-        )
+            fig.add_trace(accum_trace)
+            accum_traces.append(accum_trace)
+            trace_count += 1
+            
+        except:
+            # 如果计算失败，跳过
+            continue
     
     # 添加展开点标记
     fig.add_trace(
         go.Scatter(
-            x=[x0], 
-            y=[float(f_expr.subs(x_sym, x0))], 
+            x=[x0],
+            y=[float(f_expr.subs(x_sym, x0))],
             mode='markers',
-            marker=dict(size=10, color='black'),
-            name=f"展开点 (x₀={x0})"
+            name='展开点',
+            marker=dict(size=10, symbol='x', color='black')
         )
     )
+    trace_count += 1
     
-    # 创建滑块
+    # 添加滑块 - 修改这一部分
     steps = []
-    for i in range(max_order + 1):
+    for i in range(len(accum_traces)):
+        # 创建可见性列表，长度与实际trace数量相同
+        visibilities = [True]  # 原始函数总是可见
+        
+        # 展开项轨迹的可见性
+        for j in range(len(term_traces)):
+            visibilities.append(j < i)  # 只显示到当前阶数的项
+        
+        # 累积和轨迹的可见性
+        for j in range(len(accum_traces)):
+            visibilities.append(j == i)  # 只显示当前阶数的累积和
+        
+        # 展开点始终可见
+        visibilities.append(True)
+        
+        # 确保可见性列表长度正确
+        while len(visibilities) < trace_count:
+            visibilities.append(False)
+        
         step = dict(
             method="update",
-            args=[
-                {"visible": [True] + [j <= i for j in range(max_order + 1)] + [True]},
-                {"title": f"泰勒展开演示 (阶数: {i})"}
-            ],
+            args=[{"visible": visibilities},
+                  {"title": f"泰勒展开 (展开点 x₀={x0}, 阶数={i})"}],
             label=str(i)
         )
         steps.append(step)
     
     sliders = [dict(
-        active=0,
+        active=max_order,
+        steps=steps,
         currentvalue={"prefix": "阶数: "},
-        pad={"t": 50},
-        steps=steps
+        pad={"t": 50}
     )]
     
-    # 更新布局
-    fig.update_layout(
-        title="泰勒展开逐步演示 (阶数: 0)",
-        xaxis_title="x",
-        yaxis_title="f(x)",
-        sliders=sliders,
-        height=700,
-        hovermode="x unified"
-    )
+    fig.update_layout(sliders=sliders)
     
     return fig
 
 def error_analysis_visualization(approximator, f_expr, domain=(-5, 5), num_points=1000):
     """
-    创建详细的误差分析可视化
+    创建误差分析可视化
     
     参数:
         approximator: TaylorApproximator实例
         f_expr: 原始函数表达式
-        domain: 显示范围
+        domain: 显示范围 (min, max)
         num_points: 采样点数
         
     返回:
-        plotly Figure对象
+        plotly图表对象
     """
-    x_sym = approximator.x
+    # 生成x值
     x_vals = np.linspace(domain[0], domain[1], num_points)
     
-    # 计算原始函数值
-    f_lambda = sp.lambdify(x_sym, f_expr, 'numpy')
-    try:
-        f_vals = f_lambda(x_vals)
-    except:
-        # 对有奇点的函数，逐点计算
-        f_vals = np.zeros(num_points)
-        for i, x in enumerate(x_vals):
-            try:
-                f_vals[i] = float(f_expr.subs(x_sym, x))
-            except:
-                f_vals[i] = np.nan
-    
-    # 计算逼近值
-    approx_vals = approximator.evaluate(x_vals)
-    
     # 计算误差
-    abs_error = np.abs(f_vals - approx_vals)
-    rel_error = abs_error / (np.abs(f_vals) + 1e-15)
+    error_dict = approximator.compute_error(f_expr, x_vals)
     
-    # 使用对数刻度显示误差
-    log_abs_error = np.log10(abs_error + 1e-15)
-    log_rel_error = np.log10(rel_error + 1e-15)
-    
-    # 创建4个子图
+    # 创建子图
     fig = make_subplots(
-        rows=2, cols=2,
-        subplot_titles=(
-            "函数与泰勒逼近", 
-            "绝对误差 (线性刻度)", 
-            "绝对误差 (对数刻度)", 
-            "相对误差 (对数刻度)"
-        ),
-        specs=[
-            [{"type": "xy"}, {"type": "xy"}],
-            [{"type": "xy"}, {"type": "xy"}]
-        ]
+        rows=2, cols=1, 
+        shared_xaxes=True,
+        vertical_spacing=0.1,
+        subplot_titles=("绝对误差", "相对误差"),
+        row_heights=[0.5, 0.5]
     )
     
-    # 添加原始函数和逼近
+    # 添加绝对误差
     fig.add_trace(
         go.Scatter(
             x=x_vals, 
-            y=f_vals, 
-            name="原始函数", 
-            line=dict(color='blue')
+            y=error_dict["abs_error"], 
+            mode='lines',
+            name='绝对误差',
+            line=dict(color='red', width=2)
         ),
         row=1, col=1
     )
     
+    # 添加相对误差
     fig.add_trace(
         go.Scatter(
             x=x_vals, 
-            y=approx_vals, 
-            name=f"泰勒逼近 (阶数:{approximator.order})", 
-            line=dict(color='red')
-        ),
-        row=1, col=1
-    )
-    
-    # 添加展开点标记
-    fig.add_trace(
-        go.Scatter(
-            x=[approximator.expansion_point], 
-            y=[float(f_expr.subs(x_sym, approximator.expansion_point))], 
-            mode='markers',
-            marker=dict(size=10, color='black'),
-            name=f"展开点 x₀={approximator.expansion_point:.2f}"
-        ),
-        row=1, col=1
-    )
-    
-    # 添加线性绝对误差
-    fig.add_trace(
-        go.Scatter(
-            x=x_vals, 
-            y=abs_error, 
-            name="绝对误差", 
-            line=dict(color='green')
-        ),
-        row=1, col=2
-    )
-    
-    # 添加对数绝对误差
-    fig.add_trace(
-        go.Scatter(
-            x=x_vals, 
-            y=log_abs_error, 
-            name="绝对误差 (对数)", 
-            line=dict(color='purple')
+            y=error_dict["rel_error"] * 100, 
+            mode='lines',
+            name='相对误差 (%)',
+            line=dict(color='blue', width=2)
         ),
         row=2, col=1
     )
     
-    # 添加对数相对误差
-    fig.add_trace(
-        go.Scatter(
-            x=x_vals, 
-            y=log_rel_error, 
-            name="相对误差 (对数)", 
-            line=dict(color='orange')
-        ),
-        row=2, col=2
-    )
+    # 标记展开点
+    if approximator.function_type != "piecewise":
+        # 对于普通函数
+        fig.add_trace(
+            go.Scatter(
+                x=[approximator.x0], 
+                y=[0], 
+                mode='markers',
+                name='展开点',
+                marker=dict(size=10, symbol='x', color='black')
+            ),
+            row=1, col=1
+        )
+    else:
+        # 对于分段函数，标记各个分段的展开点
+        for i, (_, _, x_mid, _, _) in enumerate(approximator.segments):
+            fig.add_trace(
+                go.Scatter(
+                    x=[x_mid], 
+                    y=[0], 
+                    mode='markers',
+                    name=f'展开点 {i+1}',
+                    marker=dict(size=10, symbol='x')
+                ),
+                row=1, col=1
+            )
     
     # 更新布局
     fig.update_layout(
-        title=f"泰勒展开详细误差分析 (阶数: {approximator.order})",
-        height=800,
-        showlegend=True,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        )
+        height=600,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
+        margin=dict(l=60, r=60, t=80, b=60)
     )
     
-    # 更新y轴标题
-    fig.update_yaxes(title_text="f(x)", row=1, col=1)
-    fig.update_yaxes(title_text="绝对误差", row=1, col=2)
-    fig.update_yaxes(title_text="log₁₀(绝对误差)", row=2, col=1)
-    fig.update_yaxes(title_text="log₁₀(相对误差)", row=2, col=2)
-    
-    # 更新x轴标题
-    for i in range(1, 3):
-        for j in range(1, 3):
-            fig.update_xaxes(title_text="x", row=i, col=j)
+    fig.update_yaxes(title_text='绝对误差', type='log', row=1, col=1)
+    fig.update_yaxes(title_text='相对误差 (%)', type='log', row=2, col=1)
+    fig.update_xaxes(title_text='x', row=2, col=1)
     
     # 添加误差统计信息
-    max_abs_error = np.nanmax(abs_error)
-    mean_abs_error = np.nanmean(abs_error)
-    max_rel_error = np.nanmax(rel_error)
-    mean_rel_error = np.nanmean(rel_error)
+    annotations = [
+        dict(
+            x=0.5, y=1.12,
+            xref="paper", yref="paper",
+            text=f"最大绝对误差: {error_dict['max_absolute']:.2e} | 平均绝对误差: {error_dict['mean_absolute']:.2e}",
+            showarrow=False,
+            font=dict(size=12)
+        ),
+        dict(
+            x=0.5, y=0.55,
+            xref="paper", yref="paper",
+            text=f"最大相对误差: {error_dict['max_relative']*100:.2e}% | 平均相对误差: {error_dict['mean_relative']*100:.2e}%",
+            showarrow=False,
+            font=dict(size=12)
+        )
+    ]
     
-    error_stats = (
-        f"最大绝对误差: {max_abs_error:.2e}<br>"
-        f"平均绝对误差: {mean_abs_error:.2e}<br>"
-        f"最大相对误差: {max_rel_error:.2e}<br>"
-        f"平均相对误差: {mean_rel_error:.2e}"
-    )
-    
-    fig.add_annotation(
-        xref="paper", yref="paper",
-        x=0.01, y=0.01,
-        text=error_stats,
-        showarrow=False,
-        bgcolor="rgba(255, 255, 255, 0.8)",
-        bordercolor="black",
-        borderwidth=1
-    )
+    fig.update_layout(annotations=annotations)
     
     return fig

@@ -1,215 +1,312 @@
+"""
+泰勒展开逼近器模块 - 核心逼近算法实现
+"""
+
 import numpy as np
 import sympy as sp
-from sympy import symbols, Derivative, factorial, lambdify
 from .adaptive import auto_order
-from .wavelet import wavelet_preprocess
-from .error import compute_error
+from .utils import factorial, detect_singularities, function_type_analysis
+from .error import compute_remainder_bound, error_analysis
+from .wavelet import wavelet_denoise, wavelet_taylor_hybrid
 
 class TaylorApproximator:
-    """泰勒展开自适应逼近器"""
+    """
+    泰勒展开自适应逼近器
+    
+    提供自适应阶数选择、分段函数处理和误差分析功能
+    """
     
     def __init__(self, max_order=15, epsilon=1e-8):
         """
-        初始化泰勒逼近器
+        初始化逼近器
         
         参数:
-            max_order (int): 最大展开阶数
-            epsilon (float): 目标误差阈值
+            max_order: 最大允许阶数
+            epsilon: 误差容限
         """
         self.max_order = max_order
         self.epsilon = epsilon
-        self.x = symbols('x')
-        self.expansion_point = 0
-        self.coefficients = []
-        self.order = 0
-        self.function_type = "smooth"  # 'smooth', 'piecewise', 'oscillatory'
-        
-    def analyze_function(self, f_expr):
-        """分析输入函数类型并确定处理策略"""
-        try:
-            # 尝试对函数求高阶导数，检查是否在某些点不可导
-            derivatives = [f_expr]
-            for i in range(1, 4):  # 检查前3阶导数
-                derivatives.append(sp.diff(derivatives[-1], self.x))
-            
-            # 检查函数是否有不连续点或奇异点
-            singularities = sp.solve(1/f_expr, self.x)
-            
-            if singularities:
-                self.function_type = "piecewise"
-                return "piecewise"
-                
-            # 检查函数是否高度振荡(通过二阶导数符号变化频率)
-            x_vals = np.linspace(-5, 5, 100)
-            f_second_deriv = lambdify(self.x, derivatives[2], "numpy")
-            sign_changes = np.sum(np.diff(np.signbit(f_second_deriv(x_vals))))
-            
-            if sign_changes > 10:  # 如果二阶导数符号变化超过10次，视为振荡函数
-                self.function_type = "oscillatory"
-                return "oscillatory"
-                
-            return "smooth"
-        except Exception as e:
-            print(f"函数分析出错: {e}")
-            return "smooth"  # 默认为光滑函数
+        self.reset()
     
-    def fit(self, f_expr, x0=0, domain=(-5, 5)):
+    def reset(self):
+        """重置内部状态"""
+        self.fitted = False
+        self.order = None
+        self.x0 = None
+        self.domain = None
+        self.expansion = None
+        self.function_type = None
+        self.segments = []
+        self.symbolic_expansion = None
+    
+    def fit(self, f_expr, x0=0, domain=(-5, 5), adaptive=True):
         """
         拟合函数的泰勒展开
         
         参数:
-            f_expr: sympy表达式
+            f_expr: sympy表达式或可调用函数
             x0: 展开点
-            domain: 函数定义域
+            domain: 考虑的区域范围 (min, max)
+            adaptive: 是否使用自适应阶数
+            
+        返回:
+            self，以支持链式调用
         """
-        self.expansion_point = x0
-        self.function_type = self.analyze_function(f_expr)
+        self.reset()
+        self.x0 = x0
+        self.domain = domain
         
-        if self.function_type == "smooth":
-            # 直接泰勒展开
-            self.order = auto_order(f_expr, self.x, x0, self.epsilon, self.max_order)
-            self._compute_taylor_coefficients(f_expr, x0, self.order)
+        # 如果输入是可调用函数而不是sympy表达式，创建一个符号化版本
+        if not isinstance(f_expr, sp.Expr):
+            x = sp.symbols('x')
+            try:
+                # 尝试将函数映射到符号表达式
+                # 这通常只适用于简单函数
+                # 更复杂的函数需要直接提供sympy表达式
+                values = [f_expr(x0 + 0.1 * i) for i in range(-10, 11)]
+                # 使用多项式插值
+                f_expr = sp.interpolate(values, x)
+            except:
+                raise ValueError("无法将函数转换为符号表达式，请直接提供sympy表达式")
         
-        elif self.function_type == "piecewise":
-            # 对分段函数进行处理
-            break_points = self._detect_breakpoints(f_expr, domain)
-            segments = wavelet_preprocess(f_expr, self.x, break_points)
-            # 每段分别处理并存储
-            self.segments = []
-            for segment in segments:
-                x_mid = (segment[0] + segment[1]) / 2
-                order = auto_order(f_expr, self.x, x_mid, self.epsilon, self.max_order)
-                coeffs = self._compute_taylor_coefficients(f_expr, x_mid, order, return_only=True)
-                self.segments.append((segment, x_mid, coeffs, order))
+        # 获取函数的符号变量
+        x_sym = list(f_expr.free_symbols)
+        if len(x_sym) == 0:
+            # 常函数
+            self.function_type = "constant"
+            self.order = 0
+            self.expansion = f_expr
+            self.symbolic_expansion = f_expr
+            self.fitted = True
+            return self
+        elif len(x_sym) > 1:
+            raise ValueError("目前只支持单变量函数")
+        x_sym = x_sym[0]
         
+        # 分析函数类型
+        func_analysis = function_type_analysis(f_expr, x_sym, domain)
+        self.function_type = func_analysis["type"]
+        
+        # 根据函数类型选择不同的逼近策略
+        if self.function_type == "piecewise":
+            # 对分段函数使用分段泰勒展开
+            breakpoints = [domain[0]] + func_analysis.get("breakpoints", []) + [domain[1]]
+            self._fit_piecewise(f_expr, x_sym, breakpoints, adaptive)
         elif self.function_type == "oscillatory":
-            # 对振荡函数使用更高阶数和分段处理
-            self.order = min(self.max_order, auto_order(f_expr, self.x, x0, self.epsilon/10, self.max_order))
-            self._compute_taylor_coefficients(f_expr, x0, self.order)
+            # 对高频振荡函数可能需要特殊处理
+            # 这里简单地增加最小阶数
+            min_order = 3
+            if adaptive:
+                self.order = max(min_order, auto_order(f_expr, x_sym, x0, self.epsilon, 
+                                                      self.max_order, domain))
+            else:
+                self.order = self.max_order
+            self._compute_expansion(f_expr, x_sym, x0, self.order)
+        else:
+            # 对光滑函数使用标准泰勒展开
+            if adaptive:
+                self.order = auto_order(f_expr, x_sym, x0, self.epsilon, 
+                                       self.max_order, domain)
+            else:
+                self.order = self.max_order
+            self._compute_expansion(f_expr, x_sym, x0, self.order)
         
+        self.fitted = True
         return self
     
-    def _compute_taylor_coefficients(self, f_expr, x0, order, return_only=False):
-        """计算泰勒系数"""
-        coefficients = []
-        for n in range(order + 1):
-            # 计算n阶导数在x0处的值
-            nth_derivative = Derivative(f_expr, (self.x, n))
-            coef = nth_derivative.doit().subs(self.x, x0) / factorial(n)
-            coefficients.append(coef)
+    def _fit_piecewise(self, f_expr, x_sym, breakpoints, adaptive):
+        """处理分段函数"""
+        self.segments = []
         
-        if return_only:
-            return coefficients
-        else:
-            self.coefficients = coefficients
+        # 确保断点是有序的
+        breakpoints = sorted(list(set(breakpoints)))
+        
+        # 对每个分段单独进行泰勒展开
+        for i in range(len(breakpoints) - 1):
+            a, b = breakpoints[i], breakpoints[i+1]
+            # 选择分段中点作为展开点
+            x_mid = (a + b) / 2
+            
+            # 选择阶数
+            order = self.max_order
+            if adaptive:
+                try:
+                    order = auto_order(f_expr, x_sym, x_mid, self.epsilon, 
+                                      self.max_order, (a, b))
+                except:
+                    # 如果自适应选择失败，使用最大阶数
+                    pass
+            
+            # 计算展开式
+            expansion = self._compute_expansion(f_expr, x_sym, x_mid, order, add_to_self=False)
+            
+            # 记录分段信息
+            self.segments.append((a, b, x_mid, order, expansion))
+        
+        # 创建分段展开式
+        self._create_piecewise_expansion(x_sym)
     
-    def _detect_breakpoints(self, f_expr, domain):
-        """检测函数的断点或奇异点"""
-        # 尝试解析求解
-        try:
-            singularities = sp.solve(1/f_expr, self.x)
-            valid_points = [point for point in singularities 
-                          if point.is_real and domain[0] <= float(point) <= domain[1]]
-            
-            if valid_points:
-                # 添加域边界
-                points = [domain[0]] + sorted(float(point) for point in valid_points) + [domain[1]]
-                return points
-        except:
-            pass
+    def _compute_expansion(self, f_expr, x_sym, x0, order, add_to_self=True):
+        """
+        计算泰勒展开式
         
-        # 如果解析方法失败，使用数值方法
-        x_vals = np.linspace(domain[0], domain[1], 1000)
-        f_numpy = lambdify(self.x, f_expr, "numpy")
-        try:
-            y_vals = f_numpy(x_vals)
-            # 寻找值变化剧烈的点
-            derivatives = np.abs(np.diff(y_vals))
-            # 找出变化超过阈值的点
-            threshold = np.percentile(derivatives, 99)
-            potential_breaks = x_vals[1:][derivatives > threshold]
+        参数:
+            f_expr: sympy表达式
+            x_sym: 符号变量
+            x0: 展开点
+            order: 展开阶数
+            add_to_self: 是否将结果存储到self
             
-            if len(potential_breaks) > 0:
-                # 聚类相近的点
-                breaks = [potential_breaks[0]]
-                for pt in potential_breaks[1:]:
-                    if pt - breaks[-1] > (domain[1]-domain[0])/20:  # 最小间隔
-                        breaks.append(pt)
+        返回:
+            展开式
+        """
+        expansion = 0
+        
+        # 计算各阶导数和系数
+        for n in range(order + 1):
+            try:
+                # 计算n阶导数在x0点的值
+                if n == 0:
+                    dnf = f_expr.subs(x_sym, x0)
+                else:
+                    dnf = sp.diff(f_expr, x_sym, n).subs(x_sym, x0)
                 
-                return [domain[0]] + breaks + [domain[1]]
-        except:
-            pass
+                # 添加到展开式
+                term = dnf * (x_sym - x0)**n / factorial(n)
+                expansion += term
+            except:
+                # 如果计算失败，使用当前展开式
+                break
+        
+        if add_to_self:
+            self.expansion = expansion
+            self.symbolic_expansion = expansion
+        
+        return expansion
+    
+    def _create_piecewise_expansion(self, x_sym):
+        """为分段函数创建Piecewise表达式"""
+        if not self.segments:
+            return
+        
+        pieces = []
+        for a, b, x_mid, order, expansion in self.segments:
+            # 创建条件表达式
+            condition = sp.And(x_sym >= a, x_sym < b)
+            # 如果是最后一段，包括右端点
+            if b == self.domain[1]:
+                condition = sp.And(x_sym >= a, x_sym <= b)
             
-        # 默认只在边界和中点展开
-        return [domain[0], (domain[0]+domain[1])/2, domain[1]]
+            pieces.append((expansion, condition))
+        
+        # 创建分段函数
+        self.symbolic_expansion = sp.Piecewise(*pieces)
     
     def evaluate(self, x_values):
-        """评估拟合的泰勒展开"""
-        if self.function_type == "smooth" or self.function_type == "oscillatory":
-            return self._evaluate_taylor(x_values, self.expansion_point, self.coefficients)
+        """
+        在给定点上评估泰勒展开
         
-        elif self.function_type == "piecewise":
-            # 对分段函数，根据x值选择对应的分段
-            result = np.zeros_like(x_values, dtype=float)
-            for i, x in enumerate(x_values):
-                for (segment, x0, coeffs, _) in self.segments:
-                    if segment[0] <= x <= segment[1]:
-                        result[i] = self._evaluate_taylor_single(x, x0, coeffs)
-                        break
-            return result
-    
-    def _evaluate_taylor(self, x_values, x0, coefficients):
-        """评估单点泰勒展开"""
-        result = np.zeros_like(x_values, dtype=float)
-        for i, x in enumerate(x_values):
-            result[i] = self._evaluate_taylor_single(x, x0, coefficients)
-        return result
-    
-    def _evaluate_taylor_single(self, x, x0, coefficients):
-        """计算单个点的泰勒展开值"""
-        result = 0.0
-        dx = x - x0
-        for n, coef in enumerate(coefficients):
-            result += float(coef) * (dx ** n)
-        return result
-    
-    def compute_error(self, f_expr, x_values):
-        """计算近似误差"""
-        f_numpy = lambdify(self.x, f_expr, "numpy")
-        true_values = f_numpy(x_values)
-        approx_values = self.evaluate(x_values)
+        参数:
+            x_values: 单个值或数组
+            
+        返回:
+            泰勒展开在给定点的值
+        """
+        if not self.fitted:
+            raise ValueError("必须先调用fit方法")
         
-        abs_error = np.abs(true_values - approx_values)
-        rel_error = abs_error / (np.abs(true_values) + 1e-10)
+        # 如果是单个值
+        if np.isscalar(x_values):
+            return self._evaluate_single(x_values)
         
-        return {
-            "absolute": abs_error,
-            "relative": rel_error,
-            "max_absolute": np.max(abs_error),
-            "max_relative": np.max(rel_error),
-            "mean_absolute": np.mean(abs_error),
-            "mean_relative": np.mean(rel_error)
-        }
+        # 对数组，向量化处理
+        return np.array([self._evaluate_single(x) for x in x_values])
+    
+    def _evaluate_single(self, x):
+        """评估单个点"""
+        if self.function_type == "piecewise":
+            # 找到包含x的分段
+            for a, b, x_mid, order, expansion in self.segments:
+                if a <= x <= b:
+                    x_sym = list(expansion.free_symbols)[0]
+                    return float(expansion.subs(x_sym, x))
+            # 如果找不到匹配的分段，返回域中最近的点
+            if x < self.domain[0]:
+                a, b, x_mid, order, expansion = self.segments[0]
+                x_sym = list(expansion.free_symbols)[0]
+                return float(expansion.subs(x_sym, self.domain[0]))
+            else:
+                a, b, x_mid, order, expansion = self.segments[-1]
+                x_sym = list(expansion.free_symbols)[0]
+                return float(expansion.subs(x_sym, self.domain[1]))
+        else:
+            # 对常规函数，直接计算
+            x_sym = list(self.expansion.free_symbols)[0]
+            return float(self.expansion.subs(x_sym, x))
     
     def get_symbolic_expansion(self):
-        """获取符号形式的泰勒展开"""
-        if self.function_type == "smooth" or self.function_type == "oscillatory":
-            expansion = 0
-            x = self.x
-            x0 = self.expansion_point
+        """获取符号形式的展开式"""
+        if not self.fitted:
+            raise ValueError("必须先调用fit方法")
+        return self.symbolic_expansion
+    
+    def compute_error(self, f_expr, x_values):
+        """
+        计算泰勒展开在给定点上的误差
+        
+        参数:
+            f_expr: 原始函数表达式
+            x_values: 评估点数组
             
-            for n, coef in enumerate(self.coefficients):
-                expansion += coef * (x - x0)**n
-                
-            return expansion
-        else:
-            # 对于分段函数，返回分段表达式
-            pieces = []
-            x = self.x
-            
-            for (segment, x0, coeffs, _) in self.segments:
-                cond = sp.And(x >= segment[0], x <= segment[1])
-                expr = sum(coef * (x - x0)**n for n, coef in enumerate(coeffs))
-                pieces.append((expr, cond))
-                
-            return sp.Piecewise(*pieces)
+        返回:
+            包含误差统计的字典
+        """
+        if not self.fitted:
+            raise ValueError("必须先调用fit方法")
+        
+        # 计算原始函数值
+        x_sym = list(f_expr.free_symbols)[0]
+        f_func = sp.lambdify(x_sym, f_expr, 'numpy')
+        try:
+            f_values = f_func(x_values)
+        except:
+            # 逐点计算
+            f_values = np.zeros_like(x_values)
+            for i, x in enumerate(x_values):
+                try:
+                    f_values[i] = float(f_expr.subs(x_sym, x))
+                except:
+                    f_values[i] = np.nan
+        
+        # 计算逼近值
+        approx_values = self.evaluate(x_values)
+        
+        # 计算误差
+        abs_error = np.abs(f_values - approx_values)
+        rel_error = abs_error / (np.abs(f_values) + 1e-15)  # 避免除零
+        
+        # 过滤掉NaN值
+        valid_abs = abs_error[~np.isnan(abs_error)]
+        valid_rel = rel_error[~np.isnan(rel_error)]
+        
+        if len(valid_abs) == 0:
+            return {
+                "max_absolute": np.nan,
+                "mean_absolute": np.nan,
+                "max_relative": np.nan,
+                "mean_relative": np.nan,
+                "valid_points": 0,
+                "total_points": len(x_values)
+            }
+        
+        # 返回误差统计
+        return {
+            "max_absolute": np.max(valid_abs),
+            "mean_absolute": np.mean(valid_abs),
+            "max_relative": np.max(valid_rel),
+            "mean_relative": np.mean(valid_rel),
+            "valid_points": len(valid_abs),
+            "total_points": len(x_values),
+            "abs_error": abs_error,
+            "rel_error": rel_error
+        }

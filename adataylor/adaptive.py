@@ -62,6 +62,9 @@ def auto_order_selection(f_expr, x_sym, x0, epsilon=1e-8, max_order=15, domain=N
     # 如果达到最大阶数仍未满足精度要求，返回最大阶数
     return max_order
 
+# 为了保持兼容性，添加别名
+auto_order = auto_order_selection
+
 def auto_order_numerical(f_func, x0, epsilon=1e-8, max_order=15, domain=None, h=1e-4):
     """
     使用数值微分的自适应阶数选择 (适用于无解析表达式的函数)
