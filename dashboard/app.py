@@ -341,7 +341,8 @@ def update_plots(n_clicks, example_function, custom_function, x0, max_order, dom
         
         # 创建结果显示
         results = html.Div([
-            html.H5(f"函数 {function_str} 的泰勒展开:"),
+            html.H5("函数的泰勒展开:"),
+            dcc.Markdown(f"$$f(x) = {function_str}$$", mathjax=True),
             html.P(f"展开点: x₀ = {x0}"),
             html.P(order_str),
             html.Hr(),
