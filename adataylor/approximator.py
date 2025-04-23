@@ -178,6 +178,30 @@ class TaylorApproximator:
                 # 如果计算失败，使用当前展开式
                 break
         
+        # 检查定义域
+        try:
+            # 对于对数函数，检测定义域边界
+            if 'log' in str(f_expr):
+                # 找出对数函数的参数
+                log_args = []
+                for arg in sp.preorder_traversal(f_expr):
+                    if isinstance(arg, sp.log):
+                        log_args.append(arg.args[0])
+                
+                # 针对每个对数参数添加定义域检查
+                for arg in log_args:
+                    # 计算参数为0的x值
+                    try:
+                        zero_points = sp.solve(arg, x_sym)
+                        for point in zero_points:
+                            # 如果零点在展开区间内，调整展开域或警告
+                            if self.domain[0] <= float(point) <= self.domain[1]:
+                                print(f"警告: 函数在 x = {point} 处的对数参数为零")
+                    except:
+                        pass
+        except:
+            pass
+        
         if add_to_self:
             self.expansion = expansion
             self.symbolic_expansion = expansion

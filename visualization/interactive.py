@@ -200,10 +200,11 @@ def create_stepwise_visualization(f_expr, x_sym, x0, max_order=10, domain=None):
     trace_count = 1  # 从1开始，因为已经添加了原始函数
     term_traces = []
     accum_traces = []
+    successful_orders = []  # 添加这个，记录成功计算的阶数
     
     for n in range(max_order + 1):
-        # 计算n阶导数
         try:
+            # 计算n阶导数
             if n == 0:
                 dnf = f_expr.subs(x_sym, x0)
             else:
@@ -215,6 +216,9 @@ def create_stepwise_visualization(f_expr, x_sym, x0, max_order=10, domain=None):
             
             # 累加
             accumulated += term
+            
+            # 记录这个阶数成功了
+            successful_orders.append(n)
             
             # 转换为可计算函数
             term_func = sp.lambdify(x_sym, term, 'numpy')
@@ -265,8 +269,9 @@ def create_stepwise_visualization(f_expr, x_sym, x0, max_order=10, domain=None):
             accum_traces.append(accum_trace)
             trace_count += 1
             
-        except:
-            # 如果计算失败，跳过
+        except Exception as e:
+            print(f"计算 {n} 阶导数时出错: {str(e)}")
+            # 如果计算失败，跳过此阶
             continue
     
     # 添加展开点标记
@@ -283,30 +288,33 @@ def create_stepwise_visualization(f_expr, x_sym, x0, max_order=10, domain=None):
     
     # 添加滑块 - 修改这一部分
     steps = []
-    for i in range(len(accum_traces)):
-        # 创建可见性列表，长度与实际trace数量相同
-        visibilities = [True]  # 原始函数总是可见
+
+    # 确保每个阶数都有一个可视化步骤
+    for i, order in enumerate(successful_orders):
+        # 创建可见性列表，默认都不可见
+        visibilities = [False] * len(fig.data)
         
-        # 展开项轨迹的可见性
-        for j in range(len(term_traces)):
-            visibilities.append(j < i)  # 只显示到当前阶数的项
+        # 原始函数总是可见
+        visibilities[0] = True
         
-        # 累积和轨迹的可见性
-        for j in range(len(accum_traces)):
-            visibilities.append(j == i)  # 只显示当前阶数的累积和
+        # 只显示当前阶数对应的轨迹
+        for j, trace_order in enumerate(successful_orders):
+            if j <= i:  # 显示到当前阶数
+                # 项轨迹的索引
+                if 2*j+1 < len(visibilities):
+                    visibilities[2*j+1] = j == i  # 只显示当前阶的项
+                # 累积轨迹的索引
+                if 2*j+2 < len(visibilities):
+                    visibilities[2*j+2] = True  # 显示所有累积轨迹
         
         # 展开点始终可见
-        visibilities.append(True)
-        
-        # 确保可见性列表长度正确
-        while len(visibilities) < trace_count:
-            visibilities.append(False)
+        visibilities[-1] = True
         
         step = dict(
             method="update",
             args=[{"visible": visibilities},
-                  {"title": f"泰勒展开 (展开点 x₀={x0}, 阶数={i})"}],
-            label=str(i)
+                  {"title": f"泰勒展开 (展开点 x₀={x0}, 阶数={order})"}],
+            label=str(order)
         )
         steps.append(step)
     
