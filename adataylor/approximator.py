@@ -5,7 +5,7 @@
 import numpy as np
 import sympy as sp
 from .adaptive import auto_order
-from .utils import factorial, detect_singularities, function_type_analysis
+from .utils import factorial, detect_singularities, function_type_analysis, detect_oscillation_regions
 from .error import compute_remainder_bound, error_analysis
 from .wavelet import wavelet_denoise, wavelet_taylor_hybrid
 
@@ -39,7 +39,7 @@ class TaylorApproximator:
         self.segments = []
         self.symbolic_expansion = None
     
-    def fit(self, f_expr, x0=0, domain=(-5, 5), adaptive=True):
+    def fit(self, f_expr, x0=0, domain=(-5, 5), adaptive=True, use_wavelet=True):
         """
         拟合函数的泰勒展开
         
@@ -48,6 +48,7 @@ class TaylorApproximator:
             x0: 展开点
             domain: 考虑的区域范围 (min, max)
             adaptive: 是否使用自适应阶数
+            use_wavelet: 是否使用小波处理高频振荡区域
             
         返回:
             self，以支持链式调用
@@ -89,19 +90,46 @@ class TaylorApproximator:
         
         # 根据函数类型选择不同的逼近策略
         if self.function_type == "piecewise":
-            # 对分段函数使用分段泰勒展开
-            breakpoints = [domain[0]] + func_analysis.get("breakpoints", []) + [domain[1]]
-            self._fit_piecewise(f_expr, x_sym, breakpoints, adaptive)
-        elif self.function_type == "oscillatory":
-            # 对高频振荡函数可能需要特殊处理
-            # 这里简单地增加最小阶数
-            min_order = 3
+            # 使用增强的自适应分段算法
             if adaptive:
-                self.order = max(min_order, auto_order(f_expr, x_sym, x0, self.epsilon, 
-                                                      self.max_order, domain))
+                from .utils import adaptive_segmentation
+                breakpoints = adaptive_segmentation(f_expr, x_sym, domain, self.epsilon, 10)
             else:
-                self.order = self.max_order
-            self._compute_expansion(f_expr, x_sym, x0, self.order)
+                breakpoints = [domain[0]] + func_analysis.get("breakpoints", []) + [domain[1]]
+            
+            self._fit_piecewise(f_expr, x_sym, breakpoints, adaptive)
+        
+        elif self.function_type == "oscillatory" and use_wavelet:
+            # 使用小波-泰勒混合逼近
+            from .wavelet import wavelet_taylor_hybrid
+            
+            # 检测振荡区域
+            oscillation_regions = detect_oscillation_regions(f_expr, x_sym, domain)
+            
+            if oscillation_regions:
+                # 构建振荡区域的分段点列表
+                breakpoints = [domain[0]]
+                for region in oscillation_regions:
+                    if region[0] > breakpoints[-1]:
+                        breakpoints.append(region[0])
+                    if region[1] < domain[1]:
+                        breakpoints.append(region[1])
+                if breakpoints[-1] != domain[1]:
+                    breakpoints.append(domain[1])
+                
+                # 使用小波-泰勒混合方法
+                hybrid_expansion = wavelet_taylor_hybrid(f_expr, x_sym, breakpoints, 
+                                                      self.epsilon, self.max_order)
+                self.symbolic_expansion = hybrid_expansion
+                self.function_type = "hybrid"
+            else:
+                # 如果没有检测到明显的振荡区域，使用标准方法
+                if adaptive:
+                    self.order = auto_order(f_expr, x_sym, x0, self.epsilon, 
+                                           self.max_order, domain)
+                else:
+                    self.order = self.max_order
+                self._compute_expansion(f_expr, x_sym, x0, self.order)
         else:
             # 对光滑函数使用标准泰勒展开
             if adaptive:
@@ -178,30 +206,6 @@ class TaylorApproximator:
                 # 如果计算失败，使用当前展开式
                 break
         
-        # 检查定义域
-        try:
-            # 对于对数函数，检测定义域边界
-            if 'log' in str(f_expr):
-                # 找出对数函数的参数
-                log_args = []
-                for arg in sp.preorder_traversal(f_expr):
-                    if isinstance(arg, sp.log):
-                        log_args.append(arg.args[0])
-                
-                # 针对每个对数参数添加定义域检查
-                for arg in log_args:
-                    # 计算参数为0的x值
-                    try:
-                        zero_points = sp.solve(arg, x_sym)
-                        for point in zero_points:
-                            # 如果零点在展开区间内，调整展开域或警告
-                            if self.domain[0] <= float(point) <= self.domain[1]:
-                                print(f"警告: 函数在 x = {point} 处的对数参数为零")
-                    except:
-                        pass
-        except:
-            pass
-        
         if add_to_self:
             self.expansion = expansion
             self.symbolic_expansion = expansion
@@ -252,19 +256,43 @@ class TaylorApproximator:
             # 找到包含x的分段
             for a, b, x_mid, order, expansion in self.segments:
                 if a <= x <= b:
+                    # 检查是否为常数表达式
+                    if not expansion.free_symbols:
+                        return float(expansion)
                     x_sym = list(expansion.free_symbols)[0]
                     return float(expansion.subs(x_sym, x))
+            
             # 如果找不到匹配的分段，返回域中最近的点
             if x < self.domain[0]:
                 a, b, x_mid, order, expansion = self.segments[0]
+                if not expansion.free_symbols:
+                    return float(expansion)
                 x_sym = list(expansion.free_symbols)[0]
                 return float(expansion.subs(x_sym, self.domain[0]))
             else:
                 a, b, x_mid, order, expansion = self.segments[-1]
+                if not expansion.free_symbols:
+                    return float(expansion)
                 x_sym = list(expansion.free_symbols)[0]
                 return float(expansion.subs(x_sym, self.domain[1]))
+        elif self.function_type == "hybrid" or self.function_type == "constant":
+            # 对于混合或常数类型，使用symbolic_expansion
+            if not self.symbolic_expansion.free_symbols:
+                return float(self.symbolic_expansion)
+            x_sym = list(self.symbolic_expansion.free_symbols)[0]
+            return float(self.symbolic_expansion.subs(x_sym, x))
         else:
-            # 对常规函数，直接计算
+            # 对常规函数，先检查是否为常数
+            if not hasattr(self, 'expansion') or self.expansion is None:
+                # 使用symbolic_expansion作为后备
+                if not self.symbolic_expansion.free_symbols:
+                    return float(self.symbolic_expansion)
+                x_sym = list(self.symbolic_expansion.free_symbols)[0]
+                return float(self.symbolic_expansion.subs(x_sym, x))
+            
+            if not self.expansion.free_symbols:
+                return float(self.expansion)
+            
             x_sym = list(self.expansion.free_symbols)[0]
             return float(self.expansion.subs(x_sym, x))
     
@@ -333,4 +361,80 @@ class TaylorApproximator:
             "total_points": len(x_values),
             "abs_error": abs_error,
             "rel_error": rel_error
+        }
+    
+    def compare_with_pade(self, f_expr, domain=None, num_points=100):
+        """
+        将泰勒展开与帕德逼近进行比较
+        
+        参数:
+            f_expr: 原函数表达式
+            domain: 比较区域
+            num_points: 评估点数量
+            
+        返回:
+            包含比较结果的字典
+        """
+        if not self.fitted:
+            raise ValueError("必须先调用fit方法")
+        
+        if domain is None:
+            domain = self.domain
+        
+        from .pade import pade_approximant, auto_pade_order
+        
+        # 获取符号变量
+        x_sym = list(f_expr.free_symbols)[0]
+        
+        # 自动选择帕德逼近阶数
+        m, n = auto_pade_order(f_expr, x_sym, self.x0, self.epsilon, self.max_order, domain)
+        
+        # 计算帕德逼近
+        P, Q, R = pade_approximant(f_expr, x_sym, self.x0, m, n)
+        
+        # 采样点
+        x_vals = np.linspace(domain[0], domain[1], num_points)
+        
+        # 计算原函数值
+        f_func = sp.lambdify(x_sym, f_expr, 'numpy')
+        try:
+            f_vals = f_func(x_vals)
+        except:
+            f_vals = np.zeros(num_points)
+            for i, x in enumerate(x_vals):
+                try:
+                    f_vals[i] = float(f_expr.subs(x_sym, x))
+                except:
+                    f_vals[i] = np.nan
+        
+        # 计算泰勒展开值
+        taylor_vals = self.evaluate(x_vals)
+        
+        # 计算帕德逼近值
+        R_func = sp.lambdify(x_sym, R, 'numpy')
+        try:
+            pade_vals = R_func(x_vals)
+        except:
+            pade_vals = np.zeros(num_points)
+            for i, x in enumerate(x_vals):
+                try:
+                    pade_vals[i] = float(R.subs(x_sym, x))
+                except:
+                    pade_vals[i] = np.nan
+        
+        # 计算误差
+        taylor_err = np.nanmean(np.abs(f_vals - taylor_vals))
+        pade_err = np.nanmean(np.abs(f_vals - pade_vals))
+        
+        return {
+            "x_values": x_vals,
+            "original_values": f_vals,
+            "taylor_values": taylor_vals,
+            "pade_values": pade_vals,
+            "taylor_error": taylor_err,
+            "pade_error": pade_err,
+            "taylor_order": self.order,
+            "pade_orders": (m, n),
+            "pade_expression": R,
+            "improvement_ratio": taylor_err / pade_err if pade_err > 0 else float('inf')
         }
