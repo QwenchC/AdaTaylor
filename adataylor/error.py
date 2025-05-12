@@ -120,3 +120,105 @@ def error_analysis(f_expr, taylor_expr, x_sym, x_range, num_points=1000):
         "rel_error_data": rel_error,
         "x_data": x_vals
     }
+
+def convergence_analysis(f_expr, x_sym, x0, max_order, domain):
+    """
+    分析泰勒展开的收敛性
+    
+    参数:
+        f_expr: sympy表达式
+        x_sym: 符号变量
+        x0: 展开点
+        max_order: 最大分析阶数
+        domain: 分析区域
+        
+    返回:
+        不同阶数的误差数据
+    """
+    x_vals = np.linspace(domain[0], domain[1], 100)
+    
+    # 计算真实函数值
+    f_func = sp.lambdify(x_sym, f_expr, 'numpy')
+    try:
+        f_vals = f_func(x_vals)
+    except:
+        f_vals = np.zeros(len(x_vals))
+        for i, x in enumerate(x_vals):
+            try:
+                f_vals[i] = float(f_expr.subs(x_sym, x))
+            except:
+                f_vals[i] = np.nan
+    
+    # 计算不同阶数的误差
+    orders = list(range(1, max_order + 1))
+    max_errors = []
+    mean_errors = []
+    
+    for n in orders:
+        # 计算n阶泰勒展开
+        expansion = 0
+        for k in range(n + 1):
+            try:
+                if k == 0:
+                    coef = float(f_expr.subs(x_sym, x0))
+                else:
+                    coef = float(sp.diff(f_expr, x_sym, k).subs(x_sym, x0)) / factorial(k)
+                expansion += coef * (x_sym - x0)**k
+            except:
+                break
+        
+        # 计算展开值
+        expansion_func = sp.lambdify(x_sym, expansion, 'numpy')
+        try:
+            taylor_vals = expansion_func(x_vals)
+        except:
+            taylor_vals = np.zeros(len(x_vals))
+            for i, x in enumerate(x_vals):
+                try:
+                    taylor_vals[i] = float(expansion.subs(x_sym, x))
+                except:
+                    taylor_vals[i] = np.nan
+        
+        # 计算误差
+        errors = np.abs(f_vals - taylor_vals)
+        max_errors.append(np.nanmax(errors))
+        mean_errors.append(np.nanmean(errors))
+    
+    return {
+        "orders": orders,
+        "max_errors": max_errors,
+        "mean_errors": mean_errors,
+        "estimated_radius": estimate_convergence_radius(f_expr, x_sym, x0, max_order)
+    }
+
+def estimate_convergence_radius(f_expr, x_sym, x0, max_order=15):
+    """估计泰勒级数的收敛半径"""
+    # 计算高阶导数系数
+    derivatives = []
+    for n in range(max_order):
+        try:
+            if n == 0:
+                dn = float(f_expr.subs(x_sym, x0))
+            else:
+                dn = float(sp.diff(f_expr, x_sym, n).subs(x_sym, x0)) / factorial(n)
+            derivatives.append(abs(dn))
+        except:
+            break
+    
+    if len(derivatives) < 3:
+        return None
+    
+    # 使用导数系数的比值估计收敛半径
+    ratios = []
+    for i in range(len(derivatives) - 1):
+        if derivatives[i+1] > 0 and derivatives[i] > 0:
+            ratios.append(derivatives[i] / derivatives[i+1])
+    
+    if not ratios:
+        return None
+    
+    # 使用后半部分比值的平均值以获得更稳定的估计
+    mid = len(ratios) // 2
+    estimated_radius = np.median(ratios[mid:]) if mid > 0 else np.median(ratios)
+    
+    return float(estimated_radius)
