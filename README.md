@@ -32,7 +32,7 @@ AdaTaylor是一个基于泰勒展开的自适应函数逼近工具，通过结�
 
 ```bash
 # 克隆仓库
-git clone https://github.com/yourusername/AdaTaylor.git
+git clone https://github.com/QwenchC/AdaTaylor.git
 cd AdaTaylor
 
 # 安装依赖
